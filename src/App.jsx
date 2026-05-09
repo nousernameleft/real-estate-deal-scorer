@@ -6,6 +6,14 @@ export default function RealEstateDealScorer() {
   const [result, setResult] = React.useState(null);
   const [loading, setLoading] = React.useState(false);
 
+  // -----------------------------
+  // 💰 NUMBER FORMATTER ($202,000)
+  // -----------------------------
+  const formatMoney = (num) => {
+    if (!num && num !== 0) return "$0";
+    return "$" + num.toLocaleString("en-US");
+  };
+
   const analyzeDeal = async () => {
     try {
       setLoading(true);
@@ -26,52 +34,16 @@ export default function RealEstateDealScorer() {
             text = await response.text();
           }
         } catch (err) {
-          console.log("URL fetch failed → fallback to manual input");
+          console.log("URL fetch failed → fallback text");
         }
       }
 
-      const originalText = text; // for debugging
       text = text.toLowerCase();
 
       // -----------------------------
-      // 💵 ASKING PRICE (ROBUST + FRENCH FORMAT SUPPORT)
-      // -----------------------------
-
-      let askingPrice = 0;
-      let taxesNote = "";
-
-      // detect tax note
-      if (text.includes("tps/tvq") || text.includes("+ taxes") || text.includes("+taxes")) {
-        taxesNote = "⚠️ Taxes (TPS/TVQ) may apply";
-      }
-
-      // remove spaces from numbers like "1 229 000"
-      const normalizedText = text.replace(/\s/g, "");
-
-      // match formats like 1229000$ or 1,229,000$ or 1.229.000$
-      let match =
-        normalizedText.match(/([0-9]{1,3}(?:[.,]?[0-9]{3})+)\$/) ||
-        normalizedText.match(/([0-9]{6,9})\$/);
-
-      if (!match) {
-        match = text.match(/(?:price|asking)[^\d]{0,10}([0-9\s,\.]{6,12})/i);
-      }
-
-      if (!match) {
-        match = text.match(/([0-9]{6,9})/);
-      }
-
-      if (match) {
-        askingPrice = parseInt(
-          match[1].replace(/[^\d]/g, "")
-        );
-      }
-
-      // -----------------------------
-      // 🏠 ARV (After Repair Value)
+      // 🏠 ARV BASE VALUE
       // -----------------------------
       let baseValue = 300000;
-      let baseValueUsed = baseValue;
 
       if (text.includes("duplex")) baseValue = 550000;
       if (text.includes("triplex")) baseValue = 750000;
@@ -83,7 +55,9 @@ export default function RealEstateDealScorer() {
       if (text.includes("triplex")) propertyTypeNote = "triplex baseline";
       if (text.includes("fourplex")) propertyTypeNote = "fourplex baseline";
 
-      // neighborhood multiplier
+      // -----------------------------
+      // 📍 LOCATION MULTIPLIER
+      // -----------------------------
       let locationMultiplier = 1.0;
       let locationNote = "neutral area";
 
@@ -104,7 +78,9 @@ export default function RealEstateDealScorer() {
         locationNote = "lower baseline area";
       }
 
-      // condition multiplier
+      // -----------------------------
+      // 🏚 CONDITION MULTIPLIER
+      // -----------------------------
       let conditionMultiplier = 1.0;
       let conditionNote = "standard condition";
 
@@ -118,15 +94,45 @@ export default function RealEstateDealScorer() {
         conditionNote = "renovation required discount";
       }
 
+      // -----------------------------
+      // 🧠 FINAL ARV CALCULATION
+      // -----------------------------
       const ARV = Math.round(
         baseValue * locationMultiplier * conditionMultiplier
       );
 
       // -----------------------------
-      // 💰 MAO (Maximum Allowable Offer)
+      // 💰 MAO (70% RULE)
       // -----------------------------
       const rehabEstimate = 50000;
-      const MAO = Math.round(ARV * 0.7 - rehabEstimate);
+      const maoMultiplier = 0.7;
+
+      const MAO = Math.round(ARV * maoMultiplier - rehabEstimate);
+
+      // -----------------------------
+      // 💵 ASKING PRICE (ROBUST + TAX DETECTION)
+      // -----------------------------
+      let askingPrice = 0;
+      let taxesNote = "";
+
+      if (
+        text.includes("tps/tvq") ||
+        text.includes("+ taxes") ||
+        text.includes("+taxes")
+      ) {
+        taxesNote = "⚠️ Taxes (TPS/TVQ) may apply";
+      }
+
+      const normalized = text.replace(/\s/g, "");
+
+      let match =
+        normalized.match(/([0-9]{1,3}(?:[.,]?[0-9]{3})+)\$/) ||
+        normalized.match(/([0-9]{6,9})\$/) ||
+        text.match(/([0-9]{6,9})/);
+
+      if (match) {
+        askingPrice = parseInt(match[1].replace(/[^\d]/g, ""));
+      }
 
       // -----------------------------
       // 📊 SPREAD
@@ -180,23 +186,24 @@ export default function RealEstateDealScorer() {
         MAO,
         askingPrice,
         taxesNote,
-        spread: Math.round(spread),
+        spread,
         spreadPercent,
         dealType,
         riskFlags,
         score: Math.round(score),
 
         breakdown: {
-          baseValueUsed,
+          baseValue,
           propertyTypeNote,
           locationNote,
           locationMultiplier,
           conditionNote,
           conditionMultiplier,
           rehabEstimate,
-          ARV_final: ARV,
-          MAO_formula: "ARV × 70% − rehab ($50,000)",
-          spread_formula: "ARV − Asking Price",
+          maoMultiplier,
+          ARV_formula: `${baseValue} × ${locationMultiplier} × ${conditionMultiplier}`,
+          MAO_formula: `ARV × ${maoMultiplier} − ${rehabEstimate}`,
+          spread_formula: `ARV − Asking Price`,
           score_inputs: {
             spreadPercent,
             riskCount: riskFlags.length,
@@ -216,7 +223,7 @@ export default function RealEstateDealScorer() {
         spread: 0,
         spreadPercent: 0,
         dealType: "ERROR",
-        riskFlags: ["System error"],
+        riskFlags: [],
         score: 0,
         breakdown: {}
       });
@@ -268,16 +275,16 @@ export default function RealEstateDealScorer() {
 
             <div className="bg-gray-50 p-4 rounded-2xl space-y-1">
 
-              <p><b>ARV (After Repair Value):</b> ${result.ARV}</p>
-              <p><b>MAO (Maximum Allowable Offer):</b> ${result.MAO}</p>
-              <p><b>Asking Price:</b> ${result.askingPrice}</p>
+              <p><b>ARV (After Repair Value):</b> {formatMoney(result.ARV)}</p>
+              <p><b>MAO (Maximum Allowable Offer):</b> {formatMoney(result.MAO)}</p>
+              <p><b>Asking Price:</b> {formatMoney(result.askingPrice)}</p>
 
               {result.taxesNote && (
                 <p className="text-orange-600">{result.taxesNote}</p>
               )}
 
               <p className="text-lg font-semibold mt-2">
-                Spread: ${result.spread} ({result.spreadPercent}%)
+                Spread: {formatMoney(result.spread)} ({result.spreadPercent}%)
               </p>
 
             </div>
@@ -288,21 +295,26 @@ export default function RealEstateDealScorer() {
               </div>
             )}
 
-            {/* 🧠 FULL BREAKDOWN */}
+            {/* 🧠 BREAKDOWN */}
             <div className="bg-blue-50 p-4 rounded-2xl text-sm space-y-1">
               <h3 className="font-bold mb-2">🧠 Calculation Breakdown</h3>
 
-              <p><b>Base Value:</b> ${result.breakdown.baseValueUsed}</p>
+              <p><b>Base Value:</b> {formatMoney(result.breakdown.baseValue)}</p>
+              <p><b>Formula:</b> {result.breakdown.ARV_formula}</p>
+
               <p><b>Property Type:</b> {result.breakdown.propertyTypeNote}</p>
-              <p><b>Location Adjustment:</b> {result.breakdown.locationNote} (x{result.breakdown.locationMultiplier})</p>
-              <p><b>Condition:</b> {result.breakdown.conditionNote}</p>
-              <p><b>Rehab Estimate:</b> ${result.breakdown.rehabEstimate}</p>
+              <p><b>Location:</b> {result.breakdown.locationNote} (x{result.breakdown.locationMultiplier})</p>
+              <p><b>Condition:</b> {result.breakdown.conditionNote} (x{result.breakdown.conditionMultiplier})</p>
+
+              <p><b>Rehab Estimate:</b> {formatMoney(result.breakdown.rehabEstimate)}</p>
 
               <p className="mt-2"><b>MAO Formula:</b> {result.breakdown.MAO_formula}</p>
               <p><b>Spread Formula:</b> {result.breakdown.spread_formula}</p>
 
               <p className="mt-2">
-                <b>Score Inputs:</b> Spread {result.breakdown.score_inputs?.spreadPercent}%, Risk {result.breakdown.score_inputs?.riskCount}, ARV check {result.breakdown.score_inputs?.ARV_vs_price}
+                <b>Score Inputs:</b> Spread {result.breakdown.score_inputs.spreadPercent}%,
+                Risk {result.breakdown.score_inputs.riskCount},
+                ARV status {result.breakdown.score_inputs.ARV_vs_price}
               </p>
             </div>
 
