@@ -14,10 +14,6 @@ export default function RealEstateDealScorer() {
   const extractUnits = (text) => {
     let units = 0;
 
-    // -----------------------------
-    // 🇫🇷 / EN MULTI-LANGUAGE UNIT DETECTION
-    // -----------------------------
-
     const patterns = [
       /([0-9]+)\s*unit[s]?/g,
       /([0-9]+)\s*unités/g,
@@ -28,14 +24,10 @@ export default function RealEstateDealScorer() {
     patterns.forEach((regex) => {
       const match = text.match(regex);
       if (match) {
-        const num = parseInt(match[0]);
+        const num = parseInt(match[1]);
         if (num > units) units = num;
       }
     });
-
-    // -----------------------------
-    // 🔢 FALLBACK: explicit residential + commercial
-    // -----------------------------
 
     let res = 0;
     let com = 0;
@@ -46,16 +38,9 @@ export default function RealEstateDealScorer() {
     if (resMatch) res = parseInt(resMatch[1]);
     if (comMatch) com = parseInt(comMatch[1]);
 
-    if (res + com > units) {
-      units = res + com;
-    }
+    if (res + com > units) units = res + com;
 
-    // -----------------------------
-    // 🧠 FINAL SAFETY DEFAULT
-    // -----------------------------
-    if (!units || units < 1) units = 1;
-
-    return units;
+    return units || 1;
   };
 
   const analyzeDeal = async () => {
@@ -65,31 +50,22 @@ export default function RealEstateDealScorer() {
 
       let text = description || "";
 
-      // -----------------------------
-      // 🌐 URL SCRAPER
-      // -----------------------------
       if (url) {
         try {
           const response = await fetch(
             "https://r.jina.ai/http://" + url.replace(/^https?:\/\//, "")
           );
           if (response.ok) text = await response.text();
-        } catch (e) {}
+        } catch {}
       }
 
-      const originalText = text;
       text = text.toLowerCase();
 
       // -----------------------------
-      // 🏠 UNIT DETECTION (FIXED)
+      // 🏠 UNITS
       // -----------------------------
       const units = extractUnits(text);
 
-      let typeLabel = `${units}-unit property`;
-
-      // -----------------------------
-      // 💰 PER UNIT BASE MODEL
-      // -----------------------------
       const basePerUnit = {
         1: 320000,
         2: 260000,
@@ -103,7 +79,7 @@ export default function RealEstateDealScorer() {
 
       const perUnit = basePerUnit[Math.min(units, 8)] || 180000;
 
-      let baseValue = units * perUnit;
+      const baseValue = units * perUnit;
 
       // -----------------------------
       // 📍 LOCATION
@@ -120,12 +96,6 @@ export default function RealEstateDealScorer() {
       } else if (text.includes("ndg")) {
         locationMultiplier = 1.2;
         locationNote = "NDG stable";
-      } else if (text.includes("rosemont")) {
-        locationMultiplier = 1.15;
-        locationNote = "Rosemont growing";
-      } else if (text.includes("hochelaga")) {
-        locationMultiplier = 0.95;
-        locationNote = "lower baseline";
       }
 
       // -----------------------------
@@ -139,7 +109,7 @@ export default function RealEstateDealScorer() {
         conditionNote = "renovated premium";
       }
 
-      if (text.includes("needs renovation") || text.includes("as-is")) {
+      if (text.includes("as-is") || text.includes("needs renovation")) {
         conditionMultiplier = 0.85;
         conditionNote = "needs work discount";
       }
@@ -152,13 +122,13 @@ export default function RealEstateDealScorer() {
       );
 
       // -----------------------------
-      // 💰 MAO
+      // 💰 MAO (70% RULE)
       // -----------------------------
       const rehab = 50000;
       const MAO = Math.round(ARV * 0.7 - rehab);
 
       // -----------------------------
-      // 💵 ASKING PRICE (FIXED)
+      // 💵 ASKING PRICE
       // -----------------------------
       let askingPrice = 0;
       let taxesNote = "";
@@ -179,38 +149,34 @@ export default function RealEstateDealScorer() {
       }
 
       // -----------------------------
-      // 📊 SPREAD
+      // 📊 SCORE COMPONENTS (EXPLICIT)
       // -----------------------------
       const spread = ARV - askingPrice;
-      const spreadPercent = askingPrice
-        ? Math.round((spread / ARV) * 100)
-        : 0;
+      const spreadPercent = askingPrice ? (spread / ARV) * 100 : 0;
 
-      // -----------------------------
-      // ⚠️ RISKS
-      // -----------------------------
+      let spreadScore = 0;
+      if (spreadPercent >= 25) spreadScore = 30;
+      else if (spreadPercent >= 15) spreadScore = 20;
+      else if (spreadPercent >= 5) spreadScore = 10;
+      else spreadScore = -15;
+
       let riskFlags = [];
 
       if (text.includes("structural")) riskFlags.push("Structural");
       if (text.includes("foundation")) riskFlags.push("Foundation");
       if (text.includes("mold")) riskFlags.push("Mold");
       if (text.includes("water damage")) riskFlags.push("Water damage");
-      if (text.includes("tenanted")) riskFlags.push("Tenant issues");
 
-      // -----------------------------
-      // 🧠 SCORE
-      // -----------------------------
-      let score = 50;
+      const riskScore = -riskFlags.length * 5;
 
-      if (spreadPercent >= 25) score += 30;
-      else if (spreadPercent >= 15) score += 20;
-      else if (spreadPercent >= 5) score += 10;
-      else score -= 15;
+      const overpayScore = askingPrice > ARV ? -20 : 0;
 
-      score -= riskFlags.length * 5;
-      if (askingPrice > ARV) score -= 20;
+      const baseScore = 50;
 
-      score = Math.max(0, Math.min(100, score));
+      const finalScoreRaw =
+        baseScore + spreadScore + riskScore + overpayScore;
+
+      const score = Math.max(0, Math.min(100, Math.round(finalScoreRaw)));
 
       // -----------------------------
       // 🟢 DEAL TYPE
@@ -222,11 +188,10 @@ export default function RealEstateDealScorer() {
       else if (spreadPercent >= 5) dealType = "TIGHT DEAL 🟠";
 
       // -----------------------------
-      // 📦 OUTPUT
+      // OUTPUT
       // -----------------------------
       setResult({
         units,
-        typeLabel,
         ARV,
         MAO,
         askingPrice,
@@ -235,7 +200,7 @@ export default function RealEstateDealScorer() {
         spreadPercent,
         dealType,
         riskFlags,
-        score: Math.round(score),
+        score,
 
         breakdown: {
           perUnit,
@@ -244,9 +209,11 @@ export default function RealEstateDealScorer() {
           locationNote,
           conditionMultiplier,
           conditionNote,
-          ARV_formula: `${units} units × ${perUnit} × location × condition`,
-          MAO_formula: `ARV × 70% − ${rehab}`,
-          spread_formula: `ARV − Asking Price`
+          spreadScore,
+          riskScore,
+          overpayScore,
+          baseScore,
+          finalScoreRaw
         }
       });
 
@@ -273,7 +240,7 @@ export default function RealEstateDealScorer() {
         <textarea
           className="w-full border p-4 rounded-2xl"
           rows={8}
-          placeholder="Paste description (French supported)"
+          placeholder="Paste description"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
@@ -292,45 +259,45 @@ export default function RealEstateDealScorer() {
               {result.dealType}
             </div>
 
-            <div className="text-xl">
-              {result.units} units detected ({result.typeLabel})
-            </div>
-
             <div className="text-xl font-semibold">
               Score: {result.score}/100
             </div>
 
             <div className="bg-gray-50 p-4 rounded-2xl space-y-1">
 
-              <p><b>ARV:</b> {formatMoney(result.ARV)}</p>
-              <p><b>MAO:</b> {formatMoney(result.MAO)}</p>
+              <p><b>ARV (After Repair Value):</b> {formatMoney(result.ARV)}</p>
+              <p><b>MAO (Maximum Allowable Offer):</b> {formatMoney(result.MAO)}</p>
               <p><b>Asking Price:</b> {formatMoney(result.askingPrice)}</p>
 
               {result.taxesNote && (
                 <p className="text-orange-600">{result.taxesNote}</p>
               )}
 
-              <p className="font-semibold">
-                Spread: {formatMoney(result.spread)} ({result.spreadPercent}%)
+              <p>
+                Spread: {formatMoney(result.spread)} ({result.spreadPercent.toFixed(1)}%)
               </p>
 
             </div>
 
-            {result.riskFlags.length > 0 && (
-              <div className="text-red-600">
-                ⚠️ {result.riskFlags.join(", ")}
-              </div>
-            )}
-
+            {/* 🧠 FULL SCORE BREAKDOWN */}
             <div className="bg-blue-50 p-4 rounded-2xl text-sm space-y-1">
-              <h3 className="font-bold">🧠 Breakdown</h3>
+              <h3 className="font-bold">🧠 Score Breakdown</h3>
 
-              <p>Per-unit value: {formatMoney(result.breakdown.perUnit)}</p>
-              <p>Formula: {result.breakdown.ARV_formula}</p>
-              <p>MAO: {result.breakdown.MAO_formula}</p>
-              <p>Spread: {result.breakdown.spread_formula}</p>
-              <p>Location: {result.breakdown.locationNote}</p>
-              <p>Condition: {result.breakdown.conditionNote}</p>
+              <p>Base Score: {result.breakdown.baseScore}</p>
+              <p>Spread Score: {result.breakdown.spreadScore}</p>
+              <p>Risk Penalty: {result.breakdown.riskScore}</p>
+              <p>Overpay Penalty: {result.breakdown.overpayScore}</p>
+
+              <hr />
+
+              <p><b>Final Calculation:</b></p>
+              <p>
+                {result.breakdown.baseScore} +
+                {result.breakdown.spreadScore} +
+                {result.breakdown.riskScore} +
+                {result.breakdown.overpayScore}
+                = {result.breakdown.finalScoreRaw}
+              </p>
             </div>
 
           </div>
