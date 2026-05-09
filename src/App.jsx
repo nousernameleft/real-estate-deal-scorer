@@ -14,7 +14,7 @@ export default function RealEstateDealScorer() {
       let text = description || "";
 
       // -----------------------------
-      // 🌐 SAFE URL SCRAPER (no freeze risk)
+      // 🌐 SAFE URL SCRAPER
       // -----------------------------
       if (url) {
         try {
@@ -26,38 +26,101 @@ export default function RealEstateDealScorer() {
             text = await response.text();
           }
         } catch (err) {
-          console.log("URL fetch failed → using manual input");
+          console.log("URL fetch failed → fallback to manual input");
         }
       }
 
+      const originalText = text; // for debugging
       text = text.toLowerCase();
+
+      // -----------------------------
+      // 💵 ASKING PRICE (ROBUST + FRENCH FORMAT SUPPORT)
+      // -----------------------------
+
+      let askingPrice = 0;
+      let taxesNote = "";
+
+      // detect tax note
+      if (text.includes("tps/tvq") || text.includes("+ taxes") || text.includes("+taxes")) {
+        taxesNote = "⚠️ Taxes (TPS/TVQ) may apply";
+      }
+
+      // remove spaces from numbers like "1 229 000"
+      const normalizedText = text.replace(/\s/g, "");
+
+      // match formats like 1229000$ or 1,229,000$ or 1.229.000$
+      let match =
+        normalizedText.match(/([0-9]{1,3}(?:[.,]?[0-9]{3})+)\$/) ||
+        normalizedText.match(/([0-9]{6,9})\$/);
+
+      if (!match) {
+        match = text.match(/(?:price|asking)[^\d]{0,10}([0-9\s,\.]{6,12})/i);
+      }
+
+      if (!match) {
+        match = text.match(/([0-9]{6,9})/);
+      }
+
+      if (match) {
+        askingPrice = parseInt(
+          match[1].replace(/[^\d]/g, "")
+        );
+      }
 
       // -----------------------------
       // 🏠 ARV (After Repair Value)
       // -----------------------------
       let baseValue = 300000;
+      let baseValueUsed = baseValue;
 
       if (text.includes("duplex")) baseValue = 550000;
       if (text.includes("triplex")) baseValue = 750000;
       if (text.includes("fourplex")) baseValue = 900000;
 
-      // neighborhood adjustments
-      if (text.includes("plateau")) baseValue *= 1.4;
-      else if (text.includes("verdun")) baseValue *= 1.25;
-      else if (text.includes("ndg")) baseValue *= 1.2;
-      else if (text.includes("rosemont")) baseValue *= 1.15;
-      else if (text.includes("hochelaga")) baseValue *= 0.95;
+      let propertyTypeNote = "single-family baseline";
 
-      // condition adjustments
+      if (text.includes("duplex")) propertyTypeNote = "duplex baseline";
+      if (text.includes("triplex")) propertyTypeNote = "triplex baseline";
+      if (text.includes("fourplex")) propertyTypeNote = "fourplex baseline";
+
+      // neighborhood multiplier
+      let locationMultiplier = 1.0;
+      let locationNote = "neutral area";
+
+      if (text.includes("plateau")) {
+        locationMultiplier = 1.4;
+        locationNote = "Plateau premium area";
+      } else if (text.includes("verdun")) {
+        locationMultiplier = 1.25;
+        locationNote = "Verdun strong demand area";
+      } else if (text.includes("ndg")) {
+        locationMultiplier = 1.2;
+        locationNote = "NDG stable area";
+      } else if (text.includes("rosemont")) {
+        locationMultiplier = 1.15;
+        locationNote = "Rosemont growing area";
+      } else if (text.includes("hochelaga")) {
+        locationMultiplier = 0.95;
+        locationNote = "lower baseline area";
+      }
+
+      // condition multiplier
+      let conditionMultiplier = 1.0;
+      let conditionNote = "standard condition";
+
       if (text.includes("renovated") || text.includes("fully renovated")) {
-        baseValue *= 1.1;
+        conditionMultiplier = 1.1;
+        conditionNote = "renovated premium";
       }
 
       if (text.includes("needs renovation") || text.includes("as-is")) {
-        baseValue *= 0.85;
+        conditionMultiplier = 0.85;
+        conditionNote = "renovation required discount";
       }
 
-      const ARV = Math.round(baseValue);
+      const ARV = Math.round(
+        baseValue * locationMultiplier * conditionMultiplier
+      );
 
       // -----------------------------
       // 💰 MAO (Maximum Allowable Offer)
@@ -66,26 +129,7 @@ export default function RealEstateDealScorer() {
       const MAO = Math.round(ARV * 0.7 - rehabEstimate);
 
       // -----------------------------
-      // 💵 ASKING PRICE (FIXED - robust parsing)
-      // -----------------------------
-      let askingPrice = 0;
-
-      let match = text.match(/\$[\s]*([0-9][0-9,\.]+)/);
-
-      if (!match) {
-        match = text.match(/(?:price|asking)[^\d]{0,10}([0-9]{5,7})/);
-      }
-
-      if (!match) {
-        match = text.match(/([0-9]{5,7})/);
-      }
-
-      if (match) {
-        askingPrice = parseInt(match[1].replace(/,/g, ""));
-      }
-
-      // -----------------------------
-      // 📊 SPREAD CALCULATION
+      // 📊 SPREAD
       // -----------------------------
       const spread = ARV - askingPrice;
       const spreadPercent = askingPrice
@@ -104,7 +148,7 @@ export default function RealEstateDealScorer() {
       if (text.includes("tenanted")) riskFlags.push("Tenant complexity");
 
       // -----------------------------
-      // 🧠 DEAL SCORE (0–100)
+      // 🧠 SCORE (0–100)
       // -----------------------------
       let score = 50;
 
@@ -113,14 +157,14 @@ export default function RealEstateDealScorer() {
       else if (spreadPercent >= 5) score += 10;
       else score -= 15;
 
-      score -= (riskFlags.length || 0) * 5;
+      score -= riskFlags.length * 5;
 
       if (askingPrice > ARV) score -= 20;
 
       score = Math.max(0, Math.min(100, score));
 
       // -----------------------------
-      // 🟢 DEAL TYPE CLASSIFICATION
+      // 🟢 DEAL TYPE
       // -----------------------------
       let dealType = "NO DEAL 🔴";
 
@@ -129,23 +173,35 @@ export default function RealEstateDealScorer() {
       else if (spreadPercent >= 5) dealType = "TIGHT DEAL 🟠";
 
       // -----------------------------
-      // 📦 FINAL OUTPUT
+      // 📦 OUTPUT
       // -----------------------------
       setResult({
-        ARV: Math.round(ARV),
+        ARV,
         MAO,
         askingPrice,
+        taxesNote,
         spread: Math.round(spread),
         spreadPercent,
         dealType,
         riskFlags,
         score: Math.round(score),
 
-        reasoning: {
-          arvLogic: "Based on property type + neighborhood + condition adjustments",
-          maoLogic: "70% of ARV minus fixed rehab estimate",
-          spreadLogic: "ARV minus asking price = assignment potential",
-          scoreLogic: "Weighted spread strength minus risk penalties"
+        breakdown: {
+          baseValueUsed,
+          propertyTypeNote,
+          locationNote,
+          locationMultiplier,
+          conditionNote,
+          conditionMultiplier,
+          rehabEstimate,
+          ARV_final: ARV,
+          MAO_formula: "ARV × 70% − rehab ($50,000)",
+          spread_formula: "ARV − Asking Price",
+          score_inputs: {
+            spreadPercent,
+            riskCount: riskFlags.length,
+            ARV_vs_price: askingPrice > ARV ? "overpriced" : "ok"
+          }
         }
       });
 
@@ -156,17 +212,13 @@ export default function RealEstateDealScorer() {
         ARV: 0,
         MAO: 0,
         askingPrice: 0,
+        taxesNote: "",
         spread: 0,
         spreadPercent: 0,
         dealType: "ERROR",
         riskFlags: ["System error"],
         score: 0,
-        reasoning: {
-          arvLogic: "Error",
-          maoLogic: "Error",
-          spreadLogic: "Error",
-          scoreLogic: "Error"
-        }
+        breakdown: {}
       });
     } finally {
       setLoading(false);
@@ -181,10 +233,6 @@ export default function RealEstateDealScorer() {
           🏠 Wholesale Deal Analyzer
         </h1>
 
-        <p className="text-gray-600">
-          ARV • MAO • Spread • Score • Assignment Detection
-        </p>
-
         <input
           className="w-full border p-4 rounded-2xl"
           placeholder="Paste listing URL"
@@ -195,7 +243,7 @@ export default function RealEstateDealScorer() {
         <textarea
           className="w-full border p-4 rounded-2xl"
           rows={8}
-          placeholder="Or paste listing description"
+          placeholder="Paste listing description"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
@@ -220,9 +268,13 @@ export default function RealEstateDealScorer() {
 
             <div className="bg-gray-50 p-4 rounded-2xl space-y-1">
 
-              <p><b>ARV:</b> ${result.ARV}</p>
+              <p><b>ARV (After Repair Value):</b> ${result.ARV}</p>
+              <p><b>MAO (Maximum Allowable Offer):</b> ${result.MAO}</p>
               <p><b>Asking Price:</b> ${result.askingPrice}</p>
-              <p><b>MAO:</b> ${result.MAO}</p>
+
+              {result.taxesNote && (
+                <p className="text-orange-600">{result.taxesNote}</p>
+              )}
 
               <p className="text-lg font-semibold mt-2">
                 Spread: ${result.spread} ({result.spreadPercent}%)
@@ -236,14 +288,22 @@ export default function RealEstateDealScorer() {
               </div>
             )}
 
-            {/* 🧠 REASONING SECTION */}
-            <div className="bg-blue-50 p-4 rounded-2xl mt-4">
-              <h3 className="font-bold mb-2">🧠 How this was calculated</h3>
+            {/* 🧠 FULL BREAKDOWN */}
+            <div className="bg-blue-50 p-4 rounded-2xl text-sm space-y-1">
+              <h3 className="font-bold mb-2">🧠 Calculation Breakdown</h3>
 
-              <p><b>ARV:</b> {result.reasoning.arvLogic}</p>
-              <p><b>MAO:</b> {result.reasoning.maoLogic}</p>
-              <p><b>Spread:</b> {result.reasoning.spreadLogic}</p>
-              <p><b>Score:</b> {result.reasoning.scoreLogic}</p>
+              <p><b>Base Value:</b> ${result.breakdown.baseValueUsed}</p>
+              <p><b>Property Type:</b> {result.breakdown.propertyTypeNote}</p>
+              <p><b>Location Adjustment:</b> {result.breakdown.locationNote} (x{result.breakdown.locationMultiplier})</p>
+              <p><b>Condition:</b> {result.breakdown.conditionNote}</p>
+              <p><b>Rehab Estimate:</b> ${result.breakdown.rehabEstimate}</p>
+
+              <p className="mt-2"><b>MAO Formula:</b> {result.breakdown.MAO_formula}</p>
+              <p><b>Spread Formula:</b> {result.breakdown.spread_formula}</p>
+
+              <p className="mt-2">
+                <b>Score Inputs:</b> Spread {result.breakdown.score_inputs?.spreadPercent}%, Risk {result.breakdown.score_inputs?.riskCount}, ARV check {result.breakdown.score_inputs?.ARV_vs_price}
+              </p>
             </div>
 
           </div>
