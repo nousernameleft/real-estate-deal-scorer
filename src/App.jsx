@@ -10,33 +10,93 @@ export default function RealEstateDealScorer() {
     "$" + (num || 0).toLocaleString("en-US");
 
   // -----------------------------
-  // 🏠 UNIT DETECTION (FRENCH + ENGLISH FIXED)
+  // 🧠 CLEAN TEXT NORMALIZER
   // -----------------------------
-  const extractUnits = (text) => {
-    let units = 0;
-    const t = text.toLowerCase();
+  const normalize = (text) =>
+    (text || "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .replace(/\u00a0/g, " ");
+
+  // -----------------------------
+  // 💵 PRICE EXTRACTION (FIXED)
+  // -----------------------------
+  const extractPrice = (text) => {
+    const t = text;
 
     const patterns = [
-      /([0-9]+)\s*unit[s]?/g,
-      /([0-9]+)\s*unités/g,
-      /([0-9]+)\s*logements/g,
-      /immeuble\s*de\s*([0-9]+)\s*logements/g,
-      /immeuble\s*([0-9]+)\s*logements/g,
-      /building\s*of\s*([0-9]+)\s*units?/g
+      /\$\s?([0-9]{1,3}(?:[ ,.]?[0-9]{3})+)/g,
+      /([0-9]{3,3}(?:[ ,.]?[0-9]{3})+)\s*\$/g,
+      /price[^0-9]*([0-9]{3,9})/i,
+      /(\d{6,9})\$/g
     ];
 
+    let prices = [];
+
     patterns.forEach((r) => {
-      const m = t.match(r);
-      if (m) {
-        const n = parseInt(m[1]);
-        if (!isNaN(n) && n > units) units = n;
+      let m;
+      while ((m = r.exec(t)) !== null) {
+        let val = parseInt(m[1].replace(/[^\d]/g, ""));
+        if (val > 50000) prices.push(val);
       }
     });
 
-    const fallback = t.match(/([0-9]+)\s*logements?/);
-    if (fallback) units = Math.max(units, parseInt(fallback[1]));
+    if (prices.length === 0) return 0;
 
-    return units || 1;
+    // Heuristic: highest value is usually asking price
+    return Math.max(...prices);
+  };
+
+  // -----------------------------
+  // 🏠 UNIT EXTRACTION (IMPROVED)
+  // -----------------------------
+  const extractUnits = (text) => {
+    const t = normalize(text);
+
+    const patterns = [
+      /#\s*units\s*total\s*[:\-]?\s*(\d+)/,
+      /units\s*total\s*[:\-]?\s*(\d+)/,
+      /(\d+)\s*units/,
+      /(\d+)\s*unités/,
+      /(\d+)\s*logements/,
+      /immeuble\s*de\s*(\d+)\s*logements/
+    ];
+
+    for (let r of patterns) {
+      const m = t.match(r);
+      if (m) return parseInt(m[1]);
+    }
+
+    return 1;
+  };
+
+  // -----------------------------
+  // 💰 INCOME EXTRACTION (NEW)
+  // -----------------------------
+  const extractIncome = (text) => {
+    const t = normalize(text);
+
+    const match = t.match(
+      /gross\s*potential\s*income[^0-9]*([0-9]{2,3}[ ,]?[0-9]{3})/
+    );
+
+    if (!match) return 0;
+
+    return parseInt(match[1].replace(/[^\d]/g, ""));
+  };
+
+  // -----------------------------
+  // 🧭 NEIGHBOURHOOD
+  // -----------------------------
+  const extractNeighbourhood = (text) => {
+    const t = normalize(text);
+
+    if (t.includes("ville-émard")) return "Ville-Émard";
+    if (t.includes("verdun")) return "Verdun";
+    if (t.includes("plateau")) return "Plateau";
+    if (t.includes("ndg")) return "NDG";
+
+    return "Unknown";
   };
 
   const analyzeDeal = async () => {
@@ -55,235 +115,101 @@ export default function RealEstateDealScorer() {
         } catch {}
       }
 
-      text = text.toLowerCase();
+      const t = normalize(text);
 
       // -----------------------------
-      // 🏠 UNITS
+      // 🧾 CORE EXTRACTIONS
       // -----------------------------
+      const askingPrice = extractPrice(text);
       const units = extractUnits(text);
-
-      const basePerUnit = {
-        1: 320000,
-        2: 260000,
-        3: 240000,
-        4: 220000,
-        5: 210000,
-        6: 200000,
-        7: 195000,
-        8: 190000
-      };
-
-      const perUnit = basePerUnit[Math.min(units, 8)] || 180000;
-
-      const baseValue = units * perUnit;
+      const income = extractIncome(text);
+      const neighbourhood = extractNeighbourhood(text);
 
       // -----------------------------
-      // 📍 LOCATION
+      // 🏠 ARV MODEL (SIMPLE BUT CONSISTENT)
       // -----------------------------
+      const basePerUnit = 210000;
+      const baseValue = units * basePerUnit;
+
       let locationMultiplier = 1;
-      let locationNote = "Neutral market (baseline pricing)";
 
-      if (text.includes("plateau")) {
-        locationMultiplier = 1.4;
-        locationNote = "Premium demand area (Plateau)";
-      } else if (text.includes("verdun")) {
-        locationMultiplier = 1.25;
-        locationNote = "Strong rental demand (Verdun)";
-      } else if (text.includes("ndg")) {
-        locationMultiplier = 1.2;
-        locationNote = "Stable investor demand (NDG)";
-      }
+      if (t.includes("plateau")) locationMultiplier = 1.4;
+      else if (t.includes("verdun")) locationMultiplier = 1.25;
+      else if (t.includes("ville-émard")) locationMultiplier = 1.2;
+
+      const ARV = Math.round(baseValue * locationMultiplier);
 
       // -----------------------------
-      // 🏚 CONDITION
+      // 💰 MAO (MAX OFFER)
       // -----------------------------
-      let conditionMultiplier = 1;
-      let conditionNote = "Standard condition (no adjustment)";
-
-      if (text.includes("renovated")) {
-        conditionMultiplier = 1.1;
-        conditionNote = "Renovated premium applied";
-      }
-
-      if (text.includes("as-is") || text.includes("needs renovation")) {
-        conditionMultiplier = 0.85;
-        conditionNote = "Value-add / renovation required";
-      }
-
-      // -----------------------------
-      // 🧠 ARV (After Repair Value)
-      // -----------------------------
-      const ARV = Math.round(
-        baseValue * locationMultiplier * conditionMultiplier
-      );
-
-      // -----------------------------
-      // 💰 MAO (Maximum Allowable Offer)
-      // -----------------------------
-      const rehab = 50000;
+      const rehab = 60000;
       const MAO = Math.round(ARV * 0.7 - rehab);
 
       // -----------------------------
-      // 💵 ASKING PRICE
+      // 📊 INCOME YIELD CHECK (NEW INSIGHT)
       // -----------------------------
-      let askingPrice = 0;
+      let yieldNote = "No income data";
 
-      const normalized = text.replace(/\s/g, "");
-      let match =
-        normalized.match(/([0-9]{1,3}(?:[.,]?[0-9]{3})+)\$/) ||
-        normalized.match(/([0-9]{6,9})\$/) ||
-        text.match(/([0-9]{6,9})/);
+      if (income > 0) {
+        const yieldPct = (income / askingPrice) * 100;
 
-      if (match) {
-        askingPrice = parseInt(match[1].replace(/[^\d]/g, ""));
+        if (yieldPct >= 6) yieldNote = "Strong cashflow (>6%)";
+        else if (yieldPct >= 4) yieldNote = "Moderate cashflow";
+        else yieldNote = "Weak cashflow (<4%)";
       }
 
       // -----------------------------
-      // 📊 PROFITABILITY (SPREAD)
+      // 📊 SCORE
       // -----------------------------
       const spread = ARV - askingPrice;
       const spreadPercent = askingPrice ? (spread / ARV) * 100 : 0;
 
       let spreadScore = 0;
-      let spreadExplanation = "";
 
-      if (spreadPercent >= 25) {
-        spreadScore = 30;
-        spreadExplanation =
-          "Excellent margin (≥25%) → strong assignment potential";
-      } else if (spreadPercent >= 15) {
-        spreadScore = 20;
-        spreadExplanation =
-          "Good margin (15–25%) → viable wholesale deal";
-      } else if (spreadPercent >= 5) {
-        spreadScore = 10;
-        spreadExplanation =
-          "Low margin (5–15%) → limited upside";
-      } else {
-        spreadScore = -15;
-        spreadExplanation =
-          "Weak or negative spread → unattractive deal";
-      }
+      if (spreadPercent >= 25) spreadScore = 30;
+      else if (spreadPercent >= 15) spreadScore = 20;
+      else if (spreadPercent >= 5) spreadScore = 10;
+      else spreadScore = -15;
 
-      // -----------------------------
-      // ⚠️ RISK
-      // -----------------------------
-      let riskFlags = [];
+      const riskScore = 0;
 
-      if (text.includes("structural")) riskFlags.push("Structural issue");
-      if (text.includes("foundation")) riskFlags.push("Foundation risk");
-      if (text.includes("mold")) riskFlags.push("Mold risk");
-      if (text.includes("water damage")) riskFlags.push("Water damage");
-
-      const riskScore = -riskFlags.length * 5;
-
-      const overpayScore = askingPrice > ARV ? -20 : 0;
-
-      // -----------------------------
-      // 📊 FINAL SCORE
-      // -----------------------------
       const baseScore = 50;
 
-      const finalScore =
-        baseScore + spreadScore + riskScore + overpayScore;
-
-      const score = Math.max(0, Math.min(100, Math.round(finalScore)));
+      const score = Math.max(
+        0,
+        Math.min(100, Math.round(baseScore + spreadScore + riskScore))
+      );
 
       // -----------------------------
-      // 🧭 DEAL DECISION
+      // 🧭 DECISION
       // -----------------------------
       let decision = "";
-      let color = "";
 
-      if (score >= 80) {
-        decision = "ACQUIRE — Strong deal (assign immediately)";
-        color = "text-green-600";
-      } else if (score >= 65) {
-        decision = "REVIEW — Good deal, needs underwriting";
-        color = "text-yellow-600";
-      } else if (score >= 50) {
-        decision = "MARGIN RISK — Proceed only with strong upside";
-        color = "text-orange-600";
-      } else {
-        decision = "REJECT — Do not pursue";
-        color = "text-red-600";
-      }
-
-      // -----------------------------
-      // 💰 INVESTOR STRATEGY (EXPANDED)
-      // -----------------------------
-      const assignmentFee = Math.max(10000, Math.round(spread * 0.15));
-
-      const exitLow = askingPrice + assignmentFee;
-      const exitHigh = askingPrice + assignmentFee * 2;
-
-      let buyerType = "General investor";
-
-      if (units <= 4) buyerType = "Small multifamily / BRRRR investor";
-      else if (units <= 8) buyerType = "Cash-flow multifamily investor";
-      else buyerType = "Commercial / portfolio investor";
-
-      const investorLogic =
-        "Assignment fee is estimated at ~15% of spread to reflect typical wholesale compensation. Exit range reflects conservative and aggressive resale pricing to investors after assignment.";
+      if (score >= 80) decision = "ACQUIRE — Strong deal";
+      else if (score >= 65) decision = "REVIEW — Needs analysis";
+      else if (score >= 50) decision = "MARGIN RISK";
+      else decision = "REJECT";
 
       // -----------------------------
       // 🧾 OUTPUT
       // -----------------------------
       setResult({
+        askingPrice,
         units,
+        income,
+        neighbourhood,
         ARV,
         MAO,
-        askingPrice,
         spread,
-        spreadPercent,
         score,
         decision,
-        color,
-        riskFlags,
-
-        investor: {
-          assignmentFee,
-          exitLow,
-          exitHigh,
-          buyerType,
-          investorLogic
-        },
+        yieldNote,
 
         breakdown: {
-          // ARV
-          perUnit,
-          baseValue,
-          locationMultiplier,
-          locationNote,
-          conditionMultiplier,
-          conditionNote,
-          ARV_formula:
-            `${units} units × ${perUnit} × ${locationMultiplier} × ${conditionMultiplier}`,
-
-          ARV_explanation:
-            "ARV (After Repair Value) is calculated using estimated per-unit value multiplied by location and condition adjustments.",
-
-          // MAO
-          rehab,
-          MAO_formula:
-            "MAO (Maximum Allowable Offer) = ARV × 70% − rehab costs",
-
-          MAO_explanation:
-            "MAO (Maximum Allowable Offer) is the maximum price an investor should pay while maintaining profit margin after renovation costs.",
-
-          MAO_full:
-            `(${ARV} × 0.70) − ${rehab}`,
-
-          // SCORE
-          baseScore,
-          spreadScore,
-          spreadExplanation,
-          riskScore,
-          overpayScore,
-          finalScore,
-
-          score_explanation:
-            "Score combines profitability (spread), risk factors, and overpay penalties into a 0–100 investment attractiveness metric."
+          ARV_formula: `${units} × ${basePerUnit} × ${locationMultiplier}`,
+          MAO_formula: "ARV × 70% − rehab",
+          income,
+          yieldNote
         }
       });
 
@@ -294,91 +220,54 @@ export default function RealEstateDealScorer() {
 
   return (
     <div className="min-h-screen bg-gray-100 p-8">
-      <div className="max-w-4xl mx-auto bg-white p-8 rounded-3xl space-y-6">
+      <div className="max-w-4xl mx-auto bg-white p-8 rounded-3xl">
 
         <h1 className="text-3xl font-bold">
-          🏠 Wholesale Deal Intelligence Engine
+          🏠 Real Estate Deal Engine (Fixed Parsing)
         </h1>
 
         <input
-          className="w-full border p-4 rounded-2xl"
-          placeholder="Paste listing URL"
+          className="w-full border p-4 rounded-2xl mt-4"
+          placeholder="URL"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
         />
 
         <textarea
-          className="w-full border p-4 rounded-2xl"
+          className="w-full border p-4 rounded-2xl mt-4"
           rows={8}
-          placeholder="Paste listing description (French supported)"
+          placeholder="Paste listing"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
 
         <button
           onClick={analyzeDeal}
-          className="bg-black text-white px-6 py-3 rounded-2xl"
+          className="bg-black text-white px-6 py-3 rounded-2xl mt-4"
         >
-          {loading ? "Analyzing..." : "Analyze Deal"}
+          {loading ? "Analyzing..." : "Analyze"}
         </button>
 
         {result && (
-          <div className="mt-6 space-y-6">
+          <div className="mt-6 space-y-4">
 
-            <div className={`text-2xl font-bold ${result.color}`}>
-              {result.decision}
+            <div className="text-xl font-bold">
+              {result.decision} — {result.score}/100
             </div>
 
-            <div className="text-xl font-semibold">
-              Score: {result.score}/100
+            <div className="bg-gray-50 p-4 rounded-2xl">
+              <p>Price: {formatMoney(result.askingPrice)}</p>
+              <p>Units: {result.units}</p>
+              <p>Neighbourhood: {result.neighbourhood}</p>
+              <p>Income: {formatMoney(result.income)}</p>
+              <p>{result.yieldNote}</p>
             </div>
 
-            {/* CORE */}
-            <div className="bg-gray-50 p-4 rounded-2xl space-y-1">
-              <p><b>ARV (After Repair Value):</b> {formatMoney(result.ARV)}</p>
-              <p><b>MAO (Maximum Allowable Offer):</b> {formatMoney(result.MAO)}</p>
-              <p><b>Asking Price:</b> {formatMoney(result.askingPrice)}</p>
-              <p><b>Spread:</b> {formatMoney(result.spread)} ({result.spreadPercent.toFixed(1)}%)</p>
-            </div>
-
-            {/* ARV */}
             <div className="bg-blue-50 p-4 rounded-2xl text-sm">
-              <h3 className="font-bold">🏠 ARV Breakdown</h3>
-              <p>{result.breakdown.ARV_explanation}</p>
-              <p>Formula: {result.breakdown.ARV_formula}</p>
-              <p>Base value: {formatMoney(result.breakdown.baseValue)}</p>
-              <p>Market: {result.breakdown.locationNote}</p>
-              <p>Condition: {result.breakdown.conditionNote}</p>
-            </div>
-
-            {/* MAO */}
-            <div className="bg-purple-50 p-4 rounded-2xl text-sm">
-              <h3 className="font-bold">💰 MAO Breakdown</h3>
-              <p>{result.breakdown.MAO_explanation}</p>
-              <p>Formula: {result.breakdown.MAO_formula}</p>
-              <p>Math: {result.breakdown.MAO_full}</p>
-              <p>Rehab estimate: {formatMoney(result.breakdown.rehab)}</p>
-            </div>
-
-            {/* INVESTOR STRATEGY */}
-            <div className="bg-yellow-50 p-4 rounded-2xl text-sm">
-              <h3 className="font-bold">💼 Investor Strategy</h3>
-              <p><b>Buyer Type:</b> {result.investor.buyerType}</p>
-              <p><b>Assignment Fee:</b> {formatMoney(result.investor.assignmentFee)}</p>
-              <p><b>Exit Range:</b> {formatMoney(result.investor.exitLow)} → {formatMoney(result.investor.exitHigh)}</p>
-              <p>{result.investor.investorLogic}</p>
-            </div>
-
-            {/* SCORE */}
-            <div className="bg-green-50 p-4 rounded-2xl text-sm">
-              <h3 className="font-bold">📊 Score Breakdown</h3>
-              <p>{result.breakdown.score_explanation}</p>
-              <p>Base score: {result.breakdown.baseScore}</p>
-              <p>Spread score: {result.breakdown.spreadScore}</p>
-              <p>→ {result.breakdown.spreadExplanation}</p>
-              <p>Risk penalty: {result.breakdown.riskScore}</p>
-              <p>Overpay penalty: {result.breakdown.overpayScore}</p>
-              <p><b>Total:</b> {result.breakdown.finalScore}</p>
+              <p><b>ARV:</b> {formatMoney(result.ARV)}</p>
+              <p><b>MAO:</b> {formatMoney(result.MAO)}</p>
+              <p>ARV formula: {result.breakdown.ARV_formula}</p>
+              <p>MAO formula: {result.breakdown.MAO_formula}</p>
             </div>
 
           </div>
