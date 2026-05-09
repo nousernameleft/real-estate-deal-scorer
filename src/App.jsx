@@ -207,30 +207,32 @@ export default function RealEstateDealScorer() {
           {loading ? "Analyzing..." : "Analyze"}
         </button>
 
-        {result && (
-          <div className="space-y-4 mt-6">
+{result && (
+  <div className="space-y-4 mt-6">
 
-            <div className="text-2xl font-bold">
-              Score: {result.total}
-            </div>
+    <div className="text-2xl font-bold">
+      Score: {result.total}
+    </div>
 
-            <div className="text-green-600 font-semibold">
-              {result.recommendation}
-            </div>
+    <div className="text-green-600 font-semibold">
+      {result.recommendation}
+    </div>
 
-            <div className="bg-gray-50 p-4 rounded-2xl">
-              <h3 className="font-bold mb-2">💰 Rent Estimate</h3>
+    {/* 🏠 RENT ESTIMATE SECTION */}
+    <div className="bg-gray-50 p-4 rounded-2xl">
+      <h3 className="font-bold mb-2">💰 Rent Estimate</h3>
 
-              <p>Units detected: {result.units}</p>
-              <p>Base rent/unit: ${result.baseRentPerUnit}</p>
+      <p className="text-lg font-semibold">
+        ${result.estimatedLow} – ${result.estimatedHigh} / month
+      </p>
 
-              <p className="text-xl font-bold mt-2">
-                Estimated monthly rent: ${result.estimatedMonthlyRent}
-              </p>
-            </div>
+      <p className="text-sm text-gray-500 mt-1">
+        Estimated based on Montreal market data + neighborhood + condition
+      </p>
+    </div>
 
-          </div>
-        )}
+  </div>
+)}
       </div>
     </div>
   );
