@@ -7,174 +7,160 @@ export default function RealEstateDealScorer() {
   const [loading, setLoading] = React.useState(false);
 
   const analyzeDeal = async () => {
-    setLoading(true);
-    setResult(null);
+    try {
+      setLoading(true);
+      setResult(null);
 
-    let text = description;
+      let text = description || "";
 
-    // --- AUTO FETCH FROM URL ---
-    if (url) {
-      try {
-        const response = await fetch(
-          "https://r.jina.ai/http://" + url.replace(/^https?:\/\//, "")
-        );
-        text = await response.text();
-      } catch (e) {
-        text = description;
+      // -----------------------------
+      // 🌐 SAFE URL PARSING (optional)
+      // -----------------------------
+      if (url) {
+        try {
+          const response = await fetch(
+            "https://r.jina.ai/http://" + url.replace(/^https?:\/\//, "")
+          );
+
+          if (response.ok) {
+            text = await response.text();
+          }
+        } catch (err) {
+          console.log("URL fetch failed, using manual text instead.");
+        }
       }
+
+      text = text.toLowerCase();
+
+      // -----------------------------
+      // 🧠 DEAL SCORING ENGINE
+      // -----------------------------
+      let pricing = 10;
+      let valueAdd = 5;
+      let vacancy = 0;
+      let distress = 0;
+      let location = 5;
+      let risk = 0;
+
+      const distressKeywords = [
+        "estate sale",
+        "succession",
+        "needs tlc",
+        "handyman",
+        "sold as-is",
+        "motivated seller",
+        "reduced price"
+      ];
+
+      distressKeywords.forEach((w) => {
+        if (text.includes(w)) distress += 3;
+      });
+
+      const valueKeywords = [
+        "renovation",
+        "value-add",
+        "potential",
+        "investor",
+        "under market rent"
+      ];
+
+      valueKeywords.forEach((w) => {
+        if (text.includes(w)) valueAdd += 2;
+      });
+
+      const riskKeywords = [
+        "foundation",
+        "structural",
+        "mold",
+        "water damage",
+        "pyrite",
+        "legal issue"
+      ];
+
+      riskKeywords.forEach((w) => {
+        if (text.includes(w)) risk -= 4;
+      });
+
+      const strongAreas = [
+        "verdun",
+        "plateau",
+        "rosemont",
+        "ndg",
+        "villeray",
+        "ahuntsic"
+      ];
+
+      strongAreas.forEach((a) => {
+        if (text.includes(a)) location = 10;
+      });
+
+      if (text.includes("fully rented") || text.includes("entièrement loué")) {
+        vacancy = 0;
+        valueAdd -= 2;
+      }
+
+      const total =
+        pricing + valueAdd + vacancy + distress + location + risk;
+
+      // -----------------------------
+      // 🏠 RENT ESTIMATION ENGINE
+      // -----------------------------
+      let units = text.includes("triplex")
+        ? 3
+        : text.includes("duplex")
+        ? 2
+        : 1;
+
+      let baseRent = 1500;
+
+      if (text.includes("studio")) baseRent = 1200;
+      if (text.includes("1 bedroom")) baseRent = 1400;
+      if (text.includes("2 bedroom")) baseRent = 1800;
+      if (text.includes("3 bedroom")) baseRent = 2200;
+
+      let areaMultiplier = 1.0;
+
+      if (text.includes("plateau")) areaMultiplier = 1.3;
+      else if (text.includes("verdun")) areaMultiplier = 1.2;
+      else if (text.includes("ndg")) areaMultiplier = 1.15;
+      else if (text.includes("rosemont")) areaMultiplier = 1.1;
+      else if (text.includes("villeray")) areaMultiplier = 1.12;
+      else if (text.includes("hochelaga")) areaMultiplier = 0.98;
+
+      const perUnit = baseRent * areaMultiplier;
+
+      const estimatedLow = Math.round(perUnit * 0.9) * units;
+      const estimatedHigh = Math.round(perUnit * 1.1) * units;
+
+      // -----------------------------
+      // 📊 FINAL OUTPUT
+      // -----------------------------
+      setResult({
+        total,
+        estimatedLow,
+        estimatedHigh,
+        units,
+        recommendation:
+          total >= 80
+            ? "HIGH PRIORITY"
+            : total >= 65
+            ? "WORTH ANALYSIS"
+            : "PASS"
+      });
+
+    } catch (err) {
+      console.error(err);
+
+      setResult({
+        total: 0,
+        estimatedLow: 0,
+        estimatedHigh: 0,
+        units: 0,
+        recommendation: "ERROR - CHECK CONSOLE"
+      });
+    } finally {
+      setLoading(false);
     }
-
-    text = text.toLowerCase();
-
-  // --------------------------
-  // 🏠 DATA-DRIVEN RENT MODEL V3
-  // --------------------------
-
-  let units = 1;
-
-  if (text.includes("duplex")) units = 2;
-  if (text.includes("triplex")) units = 3;
-  if (text.includes("fourplex")) units = 4;
-
-  // BASE MARKET DATA (Montreal real averages)
-  const market = {
-    0: 1200, // studio
-    1: 1550, // 1 bedroom avg Montreal ~1,500–1,600
-    2: 2050, // 2 bedroom avg ~2,000–2,100
-    3: 2450,
-    4: 2900
-  };
-
-  let bedrooms = 2;
-
-  if (text.includes("studio")) bedrooms = 0;
-  if (text.includes("1 bedroom") || text.includes("1br")) bedrooms = 1;
-  if (text.includes("2 bedroom") || text.includes("2br")) bedrooms = 2;
-  if (text.includes("3 bedroom") || text.includes("3br")) bedrooms = 3;
-  if (text.includes("4 bedroom") || text.includes("4br")) bedrooms = 4;
-
-  // BASE RENT FROM REAL MARKET DATA
-  let baseRent = market[bedrooms] || 1800;
-
-  // --------------------------
-  // NEIGHBORHOOD REAL MULTIPLIERS (data-informed)
-  // --------------------------
-
-  let areaMultiplier = 1.0;
-
-  if (text.includes("plateau")) areaMultiplier = 1.25;
-  else if (text.includes("verdun")) areaMultiplier = 1.15;
-  else if (text.includes("ndg")) areaMultiplier = 1.12;
-  else if (text.includes("rosemont")) areaMultiplier = 1.08;
-  else if (text.includes("villeray")) areaMultiplier = 1.10;
-  else if (text.includes("hochelaga")) areaMultiplier = 0.98;
-
-  // --------------------------
-  // CONDITION ADJUSTMENTS (important for accuracy)
-  // --------------------------
-
-  let conditionMultiplier = 1.0;
-
-  if (text.includes("renovated") || text.includes("new")) {
-    conditionMultiplier = 1.15;
-  }
-
-  if (text.includes("luxury") || text.includes("modern")) {
-    conditionMultiplier = 1.20;
-  }
-
-  if (text.includes("needs renovation") || text.includes("tired")) {
-    conditionMultiplier = 0.85;
-  }
-
-  // --------------------------
-  // FINAL ESTIMATE (range instead of fake exact number)
-  // --------------------------
-
-  const perUnit = baseRent * areaMultiplier * conditionMultiplier;
-
-  const estimatedLow = Math.round(perUnit * 0.9) * units;
-  const estimatedHigh = Math.round(perUnit * 1.1) * units;
-  const estimatedMonthlyRent = Math.round(perUnit * units);
-
-    // --------------------------
-    // 🧠 DEAL SCORING ENGINE
-    // --------------------------
-
-    let pricing = 10;
-    let valueAdd = 5;
-    let vacancy = 0;
-    let distress = 0;
-    let location = 5;
-    let risk = 0;
-
-    const distressKeywords = [
-      "estate sale",
-      "succession",
-      "needs tlc",
-      "handyman",
-      "motivated seller",
-      "sold as-is"
-    ];
-
-    distressKeywords.forEach((w) => {
-      if (text.includes(w)) distress += 3;
-    });
-
-    const valueKeywords = [
-      "renovation",
-      "value-add",
-      "potential",
-      "under market rent",
-      "reposition"
-    ];
-
-    valueKeywords.forEach((w) => {
-      if (text.includes(w)) valueAdd += 2;
-    });
-
-    const riskKeywords = [
-      "foundation",
-      "structural",
-      "mold",
-      "water damage",
-      "pyrite"
-    ];
-
-    riskKeywords.forEach((w) => {
-      if (text.includes(w)) risk -= 4;
-    });
-
-    const strongAreas = [
-      "verdun",
-      "plateau",
-      "rosemont",
-      "ndg",
-      "villeray",
-      "ahuntsic"
-    ];
-
-    strongAreas.forEach((a) => {
-      if (text.includes(a)) location = 10;
-    });
-
-    const total =
-      pricing + valueAdd + vacancy + distress + location + risk;
-
-    setResult({
-      total,
-      estimatedMonthlyRent,
-      units,
-      baseRentPerUnit: Math.round(baseRentPerUnit),
-      recommendation:
-        total >= 80
-          ? "HIGH PRIORITY"
-          : total >= 65
-          ? "WORTH ANALYSIS"
-          : "PASS"
-    });
-
-    setLoading(false);
   };
 
   return (
@@ -182,7 +168,7 @@ export default function RealEstateDealScorer() {
       <div className="max-w-4xl mx-auto bg-white rounded-3xl shadow-xl p-8 space-y-6">
 
         <h1 className="text-3xl font-bold">
-          Real Estate Deal + Rent Estimator
+          Real Estate Deal Scorer + Rent Estimator
         </h1>
 
         <input
@@ -207,32 +193,30 @@ export default function RealEstateDealScorer() {
           {loading ? "Analyzing..." : "Analyze"}
         </button>
 
-{result && (
-  <div className="space-y-4 mt-6">
+        {result && (
+          <div className="mt-6 space-y-4">
 
-    <div className="text-2xl font-bold">
-      Score: {result.total}
-    </div>
+            <div className="text-2xl font-bold">
+              Score: {result.total}
+            </div>
 
-    <div className="text-green-600 font-semibold">
-      {result.recommendation}
-    </div>
+            <div className="text-green-600 font-semibold">
+              {result.recommendation}
+            </div>
 
-    {/* 🏠 RENT ESTIMATE SECTION */}
-    <div className="bg-gray-50 p-4 rounded-2xl">
-      <h3 className="font-bold mb-2">💰 Rent Estimate</h3>
+            <div className="bg-gray-50 p-4 rounded-2xl">
+              <h3 className="font-bold mb-2">💰 Rent Estimate</h3>
 
-      <p className="text-lg font-semibold">
-        ${result.estimatedLow} – ${result.estimatedHigh} / month
-      </p>
+              <p>Units detected: {result.units}</p>
 
-      <p className="text-sm text-gray-500 mt-1">
-        Estimated based on Montreal market data + neighborhood + condition
-      </p>
-    </div>
+              <p className="text-lg font-semibold mt-2">
+                ${result.estimatedLow} – ${result.estimatedHigh} / month
+              </p>
+            </div>
 
-  </div>
-)}
+          </div>
+        )}
+
       </div>
     </div>
   );
