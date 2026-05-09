@@ -14,7 +14,7 @@ export default function RealEstateDealScorer() {
       let text = description || "";
 
       // -----------------------------
-      // 🌐 SAFE URL PARSING (optional)
+      // 🌐 SAFE URL EXTRACTION (no freeze)
       // -----------------------------
       if (url) {
         try {
@@ -26,140 +26,114 @@ export default function RealEstateDealScorer() {
             text = await response.text();
           }
         } catch (err) {
-          console.log("URL fetch failed, using manual text instead.");
+          console.log("URL fetch failed → using manual text");
         }
       }
 
       text = text.toLowerCase();
 
       // -----------------------------
-      // 🧠 DEAL SCORING ENGINE
+      // 🏠 ARV (After Repair Value)
       // -----------------------------
-      let pricing = 10;
-      let valueAdd = 5;
-      let vacancy = 0;
-      let distress = 0;
-      let location = 5;
-      let risk = 0;
+      let baseValue = 300000;
 
-      const distressKeywords = [
-        "estate sale",
-        "succession",
-        "needs tlc",
-        "handyman",
-        "sold as-is",
-        "motivated seller",
-        "reduced price"
-      ];
+      if (text.includes("duplex")) baseValue = 550000;
+      if (text.includes("triplex")) baseValue = 750000;
+      if (text.includes("fourplex")) baseValue = 900000;
 
-      distressKeywords.forEach((w) => {
-        if (text.includes(w)) distress += 3;
-      });
+      // neighborhood multipliers
+      if (text.includes("plateau")) baseValue *= 1.4;
+      else if (text.includes("verdun")) baseValue *= 1.25;
+      else if (text.includes("ndg")) baseValue *= 1.2;
+      else if (text.includes("rosemont")) baseValue *= 1.15;
+      else if (text.includes("hochelaga")) baseValue *= 0.95;
 
-      const valueKeywords = [
-        "renovation",
-        "value-add",
-        "potential",
-        "investor",
-        "under market rent"
-      ];
-
-      valueKeywords.forEach((w) => {
-        if (text.includes(w)) valueAdd += 2;
-      });
-
-      const riskKeywords = [
-        "foundation",
-        "structural",
-        "mold",
-        "water damage",
-        "pyrite",
-        "legal issue"
-      ];
-
-      riskKeywords.forEach((w) => {
-        if (text.includes(w)) risk -= 4;
-      });
-
-      const strongAreas = [
-        "verdun",
-        "plateau",
-        "rosemont",
-        "ndg",
-        "villeray",
-        "ahuntsic"
-      ];
-
-      strongAreas.forEach((a) => {
-        if (text.includes(a)) location = 10;
-      });
-
-      if (text.includes("fully rented") || text.includes("entièrement loué")) {
-        vacancy = 0;
-        valueAdd -= 2;
+      // condition adjustment
+      if (text.includes("renovated") || text.includes("fully renovated")) {
+        baseValue *= 1.1;
       }
 
-      const total =
-        pricing + valueAdd + vacancy + distress + location + risk;
+      if (text.includes("needs renovation") || text.includes("as-is")) {
+        baseValue *= 0.85;
+      }
+
+      const ARV = Math.round(baseValue);
 
       // -----------------------------
-      // 🏠 RENT ESTIMATION ENGINE
+      // 💰 MAO (Wholesale formula)
       // -----------------------------
-      let units = text.includes("triplex")
-        ? 3
-        : text.includes("duplex")
-        ? 2
-        : 1;
-
-      let baseRent = 1500;
-
-      if (text.includes("studio")) baseRent = 1200;
-      if (text.includes("1 bedroom")) baseRent = 1400;
-      if (text.includes("2 bedroom")) baseRent = 1800;
-      if (text.includes("3 bedroom")) baseRent = 2200;
-
-      let areaMultiplier = 1.0;
-
-      if (text.includes("plateau")) areaMultiplier = 1.3;
-      else if (text.includes("verdun")) areaMultiplier = 1.2;
-      else if (text.includes("ndg")) areaMultiplier = 1.15;
-      else if (text.includes("rosemont")) areaMultiplier = 1.1;
-      else if (text.includes("villeray")) areaMultiplier = 1.12;
-      else if (text.includes("hochelaga")) areaMultiplier = 0.98;
-
-      const perUnit = baseRent * areaMultiplier;
-
-      const estimatedLow = Math.round(perUnit * 0.9) * units;
-      const estimatedHigh = Math.round(perUnit * 1.1) * units;
+      const rehabEstimate = 50000;
+      const MAO = Math.round(ARV * 0.7 - rehabEstimate);
 
       // -----------------------------
-      // 📊 FINAL OUTPUT
+      // 💵 ASKING PRICE EXTRACTION
+      // -----------------------------
+      let askingPrice = 0;
+
+      const priceMatch = text.match(/\$([0-9,.]+)/);
+      if (priceMatch) {
+        askingPrice = parseInt(priceMatch[1].replace(/,/g, ""));
+      }
+
+      // -----------------------------
+      // 📊 SPREAD CALCULATION
+      // -----------------------------
+      const spread = ARV - askingPrice;
+      const spreadPercent = askingPrice
+        ? Math.round((spread / ARV) * 100)
+        : 0;
+
+      // -----------------------------
+      // 🟢 DEAL CLASSIFICATION
+      // -----------------------------
+      let dealType = "NO DEAL 🔴";
+
+      if (spreadPercent >= 25) {
+        dealType = "STRONG ASSIGNMENT DEAL 🟢";
+      } else if (spreadPercent >= 15) {
+        dealType = "POSSIBLE ASSIGNMENT 🟡";
+      } else if (spreadPercent >= 5) {
+        dealType = "TIGHT DEAL 🟠";
+      }
+
+      // -----------------------------
+      // ⚠️ RISK FLAGS
+      // -----------------------------
+      let riskFlags = [];
+
+      if (text.includes("structural")) riskFlags.push("Structural issue");
+      if (text.includes("foundation")) riskFlags.push("Foundation risk");
+      if (text.includes("mold")) riskFlags.push("Mold risk");
+      if (text.includes("water damage")) riskFlags.push("Water damage");
+      if (text.includes("tenanted")) riskFlags.push("Tenant complexity");
+
+      // -----------------------------
+      // 📦 FINAL OUTPUT
       // -----------------------------
       setResult({
-        total,
-        estimatedLow,
-        estimatedHigh,
-        units,
-        recommendation:
-          total >= 80
-            ? "HIGH PRIORITY"
-            : total >= 65
-            ? "WORTH ANALYSIS"
-            : "PASS"
+        ARV: Math.round(ARV),
+        MAO,
+        askingPrice,
+        spread: Math.round(spread),
+        spreadPercent,
+        dealType,
+        riskFlags
       });
 
     } catch (err) {
       console.error(err);
 
       setResult({
-        total: 0,
-        estimatedLow: 0,
-        estimatedHigh: 0,
-        units: 0,
-        recommendation: "ERROR - CHECK CONSOLE"
+        ARV: 0,
+        MAO: 0,
+        askingPrice: 0,
+        spread: 0,
+        spreadPercent: 0,
+        dealType: "ERROR",
+        riskFlags: ["System error"]
       });
     } finally {
-      setLoading(false);
+      setLoading(false); // 🔥 GUARANTEES NO FREEZE
     }
   };
 
@@ -168,8 +142,12 @@ export default function RealEstateDealScorer() {
       <div className="max-w-4xl mx-auto bg-white rounded-3xl shadow-xl p-8 space-y-6">
 
         <h1 className="text-3xl font-bold">
-          Real Estate Deal Scorer + Rent Estimator
+          🏠 Wholesale Deal Analyzer
         </h1>
+
+        <p className="text-gray-600">
+          ARV • MAO • Spread • Assignment Detection
+        </p>
 
         <input
           className="w-full border p-4 rounded-2xl"
@@ -181,7 +159,7 @@ export default function RealEstateDealScorer() {
         <textarea
           className="w-full border p-4 rounded-2xl"
           rows={8}
-          placeholder="Or paste description"
+          placeholder="Or paste listing description"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
@@ -190,29 +168,33 @@ export default function RealEstateDealScorer() {
           onClick={analyzeDeal}
           className="bg-black text-white px-6 py-3 rounded-2xl"
         >
-          {loading ? "Analyzing..." : "Analyze"}
+          {loading ? "Analyzing..." : "Analyze Deal"}
         </button>
 
         {result && (
           <div className="mt-6 space-y-4">
 
             <div className="text-2xl font-bold">
-              Score: {result.total}
+              {result.dealType}
             </div>
 
-            <div className="text-green-600 font-semibold">
-              {result.recommendation}
-            </div>
+            <div className="bg-gray-50 p-4 rounded-2xl space-y-1">
 
-            <div className="bg-gray-50 p-4 rounded-2xl">
-              <h3 className="font-bold mb-2">💰 Rent Estimate</h3>
-
-              <p>Units detected: {result.units}</p>
+              <p><b>ARV:</b> ${result.ARV}</p>
+              <p><b>Asking Price:</b> ${result.askingPrice}</p>
+              <p><b>MAO (Max Offer):</b> ${result.MAO}</p>
 
               <p className="text-lg font-semibold mt-2">
-                ${result.estimatedLow} – ${result.estimatedHigh} / month
+                Spread: ${result.spread} ({result.spreadPercent}%)
               </p>
+
             </div>
+
+            {result.riskFlags.length > 0 && (
+              <div className="text-red-600">
+                ⚠️ Risks: {result.riskFlags.join(", ")}
+              </div>
+            )}
 
           </div>
         )}
