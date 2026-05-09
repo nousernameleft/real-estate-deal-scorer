@@ -12,20 +12,56 @@ export default function RealEstateDealScorer() {
 
     let text = description;
 
-    // STEP 1: Try to fetch content from URL (instant parsing)
+    // --- AUTO FETCH FROM URL ---
     if (url) {
       try {
         const response = await fetch(
           "https://r.jina.ai/http://" + url.replace(/^https?:\/\//, "")
         );
-
         text = await response.text();
-      } catch (err) {
-        text = description; // fallback if fetch fails
+      } catch (e) {
+        text = description;
       }
     }
 
     text = text.toLowerCase();
+
+    // --------------------------
+    // 🏠 RENT ESTIMATION ENGINE
+    // --------------------------
+
+    let units = 1;
+
+    if (text.includes("duplex")) units = 2;
+    if (text.includes("triplex")) units = 3;
+    if (text.includes("fourplex")) units = 4;
+
+    // rough base rent assumptions for Montreal (very simplified)
+    let baseRentPerUnit = 1400;
+
+    // neighborhood multipliers
+    if (text.includes("plateau")) baseRentPerUnit = 1800;
+    if (text.includes("verdun")) baseRentPerUnit = 1700;
+    if (text.includes("ndg")) baseRentPerUnit = 1750;
+    if (text.includes("rosemont")) baseRentPerUnit = 1600;
+    if (text.includes("hochelaga")) baseRentPerUnit = 1500;
+    if (text.includes("villeray")) baseRentPerUnit = 1650;
+
+    // bedroom signals (very rough heuristics)
+    let bedrooms = 2;
+
+    if (text.includes("studio")) bedrooms = 1;
+    if (text.includes("3 bedroom") || text.includes("3br")) bedrooms = 3;
+    if (text.includes("4 bedroom") || text.includes("4br")) bedrooms = 4;
+
+    // adjust rent by bedrooms
+    baseRentPerUnit += (bedrooms - 2) * 250;
+
+    const estimatedMonthlyRent = units * baseRentPerUnit;
+
+    // --------------------------
+    // 🧠 DEAL SCORING ENGINE
+    // --------------------------
 
     let pricing = 10;
     let valueAdd = 5;
@@ -34,111 +70,70 @@ export default function RealEstateDealScorer() {
     let location = 5;
     let risk = 0;
 
-    // Vacancy / upside detection
-    if (
-      text.includes("vacant") ||
-      text.includes("occupancy available") ||
-      text.includes("double occupancy") ||
-      text.includes("triple occupancy")
-    ) {
-      vacancy += 10;
-      valueAdd += 5;
-    }
-
-    // Distress keywords
     const distressKeywords = [
       "estate sale",
       "succession",
       "needs tlc",
       "handyman",
       "motivated seller",
-      "reduced price",
-      "original condition",
-      "needs updating",
       "sold as-is"
     ];
 
-    distressKeywords.forEach((word) => {
-      if (text.includes(word)) distress += 3;
+    distressKeywords.forEach((w) => {
+      if (text.includes(w)) distress += 3;
     });
 
-    // Value-add keywords
     const valueKeywords = [
-      "under market rent",
       "renovation",
-      "updating",
-      "cosmetic",
       "value-add",
       "potential",
-      "investor"
+      "under market rent",
+      "reposition"
     ];
 
-    valueKeywords.forEach((word) => {
-      if (text.includes(word)) valueAdd += 2;
+    valueKeywords.forEach((w) => {
+      if (text.includes(w)) valueAdd += 2;
     });
 
-    // Risk keywords
     const riskKeywords = [
       "foundation",
       "structural",
-      "contamination",
       "mold",
       "water damage",
-      "legal issue",
       "pyrite"
     ];
 
-    riskKeywords.forEach((word) => {
-      if (text.includes(word)) risk -= 4;
+    riskKeywords.forEach((w) => {
+      if (text.includes(w)) risk -= 4;
     });
 
-    // Strong Montreal areas
     const strongAreas = [
       "verdun",
       "plateau",
       "rosemont",
-      "hochelaga",
       "ndg",
-      "ahuntsic",
       "villeray",
-      "lachine"
+      "ahuntsic"
     ];
 
-    strongAreas.forEach((area) => {
-      if (text.includes(area)) location = 10;
+    strongAreas.forEach((a) => {
+      if (text.includes(a)) location = 10;
     });
 
-    // Fully rented penalty
-    if (text.includes("fully rented") || text.includes("entièrement loué")) {
-      vacancy = 0;
-      valueAdd -= 2;
-    }
-
-    const total = pricing + valueAdd + vacancy + distress + location + risk;
-
-    let recommendation = "PASS";
-    let recommendationColor = "text-red-600";
-
-    if (total >= 80) {
-      recommendation = "HIGH PRIORITY";
-      recommendationColor = "text-green-600";
-    } else if (total >= 65) {
-      recommendation = "WORTH DEEP ANALYSIS";
-      recommendationColor = "text-yellow-600";
-    } else if (total >= 50) {
-      recommendation = "POSSIBLE BUT THIN";
-      recommendationColor = "text-orange-600";
-    }
+    const total =
+      pricing + valueAdd + vacancy + distress + location + risk;
 
     setResult({
       total,
-      recommendation,
-      pricing,
-      valueAdd,
-      vacancy,
-      distress,
-      location,
-      risk
+      estimatedMonthlyRent,
+      units,
+      baseRentPerUnit: Math.round(baseRentPerUnit),
+      recommendation:
+        total >= 80
+          ? "HIGH PRIORITY"
+          : total >= 65
+          ? "WORTH ANALYSIS"
+          : "PASS"
     });
 
     setLoading(false);
@@ -147,8 +142,9 @@ export default function RealEstateDealScorer() {
   return (
     <div className="min-h-screen bg-gray-100 p-8">
       <div className="max-w-4xl mx-auto bg-white rounded-3xl shadow-xl p-8 space-y-6">
-        <h1 className="text-4xl font-bold">
-          Real Estate Deal Scorer
+
+        <h1 className="text-3xl font-bold">
+          Real Estate Deal + Rent Estimator
         </h1>
 
         <input
@@ -161,7 +157,7 @@ export default function RealEstateDealScorer() {
         <textarea
           className="w-full border p-4 rounded-2xl"
           rows={8}
-          placeholder="OR paste description here"
+          placeholder="Or paste description"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
@@ -170,25 +166,31 @@ export default function RealEstateDealScorer() {
           onClick={analyzeDeal}
           className="bg-black text-white px-6 py-3 rounded-2xl"
         >
-          {loading ? "Analyzing..." : "Analyze Deal"}
+          {loading ? "Analyzing..." : "Analyze"}
         </button>
 
         {result && (
-          <div className="mt-6 space-y-4">
-            <h2 className="text-3xl font-bold">
+          <div className="space-y-4 mt-6">
+
+            <div className="text-2xl font-bold">
               Score: {result.total}
-            </h2>
-
-            <h3 className={result.recommendationColor + " text-xl font-semibold"}>
-              {result.recommendation}
-            </h3>
-
-            <div className="text-sm text-gray-600 space-y-1">
-              <p>Value-add: {result.valueAdd}</p>
-              <p>Distress: {result.distress}</p>
-              <p>Location: {result.location}</p>
-              <p>Risk: {result.risk}</p>
             </div>
+
+            <div className="text-green-600 font-semibold">
+              {result.recommendation}
+            </div>
+
+            <div className="bg-gray-50 p-4 rounded-2xl">
+              <h3 className="font-bold mb-2">💰 Rent Estimate</h3>
+
+              <p>Units detected: {result.units}</p>
+              <p>Base rent/unit: ${result.baseRentPerUnit}</p>
+
+              <p className="text-xl font-bold mt-2">
+                Estimated monthly rent: ${result.estimatedMonthlyRent}
+              </p>
+            </div>
+
           </div>
         )}
       </div>
